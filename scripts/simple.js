@@ -1,37 +1,76 @@
-import http from 'k6/http';
-import { sleep, check } from 'k6';
-import { Counter } from 'k6/metrics';
-
-// A simple counter for http requests
-
-export const requests = new Counter('http_reqs');
-
-// you can specify stages of your test (ramp up/down patterns) through the options object
-// target is the number of VUs you are aiming for
+import {group, sleep} from "k6";
+import http from "k6/http";
 
 export const options = {
-  stages: [
-    { target: 20, duration: '1m' },
-    // { target: 15, duration: '1m' },
-    // { target: 0, duration: '1m' },
-  ],
-  thresholds: {
-    requests: ['count < 100'],
+  ext: {
+    loadimpact: {
+      distribution: {
+        "amazon:fr:paris": { loadZone: "amazon:fr:paris", percent: 100 },
+      },
+    },
   },
+  stages: [
+    { target: 20, duration: "10s" },
+    // { target: 2, duration: "2m" },
+    // { target: 3, duration: "2m" },
+    // { target: 20, duration: "3m" },
+    // { target: 0, duration: "1m" },
+  ],
 };
 
-const data = JSON.parse(open("./data.json"));
+const userCredentials = JSON.parse(open("./data.json"));
+
+// Токены для авторизации
+let csrfToken = undefined
+const apiLoginUrl = "https://api.frfrstaging.ru/v3/6faa1960-0f60-44c2-8e31-9918f2179c64/ufa/auth/sign_in/"
+
+function saveCSRFToken(response){
+
+  const csrftoken2 = response["cookies"]["csrftoken2"]
+
+  if (typeof csrftoken2 !== "undefined") {
+    csrfToken = csrftoken2[0]["value"]
+  }
+}
+
+let defaultHeaders = {
+  accept: "application/json, text/plain, */*",
+  "content-type": "application/json",
+  "sec-ch-ua":
+      '"Google Chrome";v="95", "Chromium";v="95", ";Not A Brand";v="99"',
+  "sec-ch-ua-mobile": "?0",
+}
+
+function authenticate(userCredentials){
+  // Пытаемся получить сохраненный токен
+  if (typeof csrfToken !== "undefined"){
+    return csrfToken
+  }
+
+  // Запрос на авторизацию
+  const response = http.post(
+      apiLoginUrl,
+      JSON.stringify(userCredentials),
+      {
+        headers: defaultHeaders
+      }
+  )
+
+  // Возвращаем сохраненный токен
+  saveCSRFToken(response)
+  return csrfToken
+}
 
 export default function () {
-  // our HTTP request, note that we are saving the response to res, which can be accessed later
 
+  const usersCount = userCredentials.users.length
 
-  const res = http.get('http://test.k6.io');
+  // Каждому VU по одному аккаунту, для избежания конфликтов
+  const userCredential = userCredentials.users[(__VU - 1) % usersCount];
 
-  sleep(1);
+  const csrfToken = authenticate(userCredential)
 
-  const checkRes = check(res, {
-    'status is 200': (r) => r.status === 200,
-    'response body': (r) => r.body.indexOf('Feel free to browse') !== -1,
-  });
+  console.log("VU: ", __VU, "ITER: ", __ITER, "t: ", JSON.stringify(userCredential), JSON.stringify(csrfToken))
+
+  sleep(1)
 }
